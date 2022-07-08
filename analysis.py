@@ -142,14 +142,14 @@ class MolearnAnalysis(object):
             crd_ref = dataset[i].permute(1,0).unsqueeze(0).data.cpu().numpy()*self.stdval + self.meanval
             self.mol.coordinates = deepcopy(crd_ref)
             self.mol.write_pdb("tmp.pdb")
-            s = dope_score("tmp.pdb")
+            s = self._dope_score("tmp.pdb")
             dope_dataset.append(s)
 
             # calculate DOPE score of decoded counterpart
             crd_mdl = decoded[i].permute(1,0).unsqueeze(0).data.cpu().numpy()[:, :dataset.shape[2]]*self.stdval + self.meanval  
             self.mol.coordinates = deepcopy(crd_mdl)
             self.mol.write_pdb("tmp.pdb")
-            s = dope_score("tmp.pdb")
+            s = self._dope_score("tmp.pdb")
             dope_decoded.append(s)
 
         return dope_dataset, dope_decoded
@@ -169,7 +169,7 @@ class MolearnAnalysis(object):
 
         if hasattr(self, "surf_z"):
             if samples == len(self.surf_z):
-                return self.surf_z, self.surf_c
+                return self.surf_z, self.surf_c, self.xvals, self.yvals
         
         self.xvals, self.yvals = self._get_sampling_ranges(samples)
         surf_z = np.zeros((len(self.xvals), len(self.yvals))) # L2 norms in latent space ("drift")
@@ -193,6 +193,7 @@ class MolearnAnalysis(object):
 
         self.surf_c = np.sqrt(surf_c)
         self.surf_z = np.sqrt(surf_z)
+        
         return self.surf_z, self.surf_c, self.xvals, self.yvals
 
 
@@ -210,7 +211,7 @@ class MolearnAnalysis(object):
 
         if hasattr(self, "surf_dope"):
             if samples == len(self.surf_dope):
-                return self.surf_dope
+                return self.surf_dope, self.xvals, self.yvals
         
         self.xvals, self.yvals = self._get_sampling_ranges(samples)
         
