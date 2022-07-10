@@ -165,8 +165,37 @@ class MolearnAnalysis(object):
         return xvals, yvals
         
     
-    def scan_error(self, samples = 50):
+    def scan_error_from_target(self, target, samples=50):
+        '''
+        experimental function, creating a coloured landscape of RMSD vs single target structure
+        target should be a Tensor of a single protein stucture loaded via load_test
+        '''
+        target = target.numpy().flatten()*self.stdval + self.meanval
+        
+        self.xvals, self.yvals = self._get_sampling_ranges(samples)
+        surf_compare = np.zeros((len(self.xvals), len(self.yvals)))
 
+        with torch.no_grad():
+
+            for x, i in enumerate(self.xvals):
+                for y, j in enumerate(self.yvals):
+
+                    # take latent space coordinate (1) and decode it (2)
+                    z = torch.tensor([[[i,j]]]).float()
+                    s = self.network.decode(z)[:,:,:self.training_set.shape[2]]*self.stdval + self.meanval
+
+                    surf_compare[x,y] = np.sum((s.numpy().flatten()-target)**2)
+
+        #for "true Cartesian RMSD error", should multiply by [sum stdev**2]
+        return np.sqrt(surf_compare/len(target)) # Cartesian L2 norm, self.xvals, self.yvals
+        
+    
+    def scan_error(self, samples = 50):
+        '''
+        grid sample the latent space on a samples x samples grid (50 x 50 by default).
+        Boundaries are defined by training set projections extrema, plus/minus 10%
+        '''
+        
         if hasattr(self, "surf_z"):
             if samples == len(self.surf_z):
                 return self.surf_z, self.surf_c, self.xvals, self.yvals
@@ -191,6 +220,7 @@ class MolearnAnalysis(object):
                     surf_z[x,y] = np.sum((z2.numpy().flatten()-z1.numpy().flatten())**2) # Latent space L2, i.e. (1) vs (3)
                     surf_c[x,y] = np.sum((s2.numpy().flatten()-s1.numpy().flatten())**2) # Cartesian L2, i.e. (2) vs (4)
 
+                    
         self.surf_c = np.sqrt(surf_c)
         self.surf_z = np.sqrt(surf_z)
         
