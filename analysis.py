@@ -519,7 +519,7 @@ class MolearnGUI(object):
 
         # coloured background
         if "drift" in options:
-            sc = np.log(self.MA.surf_c)
+            sc = np.log(self.MA.surf_z)
         elif "DOPE" in options:
             sc = np.log(self.MA.surf_dope)
         else:
