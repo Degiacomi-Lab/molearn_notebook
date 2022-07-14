@@ -21,7 +21,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 #edit path as required for your computer (or remove, if you installed molearn via conda-forge)
-sys.path.insert(0, "C:\\Users\\xdzl45\\workspace\\molearn\\src")
+#sys.path.insert(0, "C:\\Users\\xdzl45\\workspace\\molearn\\src")
 from molearn import load_data, Auto_potential, Autoencoder, ResidualBlock
 
 from ipywidgets import HBox, VBox, Layout
@@ -29,7 +29,6 @@ from ipywidgets import widgets
 from tkinter import Tk, filedialog
 import plotly.graph_objects as go
 import nglview as nv
-
 
 
 class MolearnAnalysis(object):
@@ -186,8 +185,9 @@ class MolearnAnalysis(object):
 
                     surf_compare[x,y] = np.sum((s.numpy().flatten()-target)**2)
 
-        #for "true Cartesian RMSD error", should multiply by [sum stdev**2]
-        return np.sqrt(surf_compare/len(target)) # Cartesian L2 norm, self.xvals, self.yvals
+        self.surf_target = np.sqrt(surf_compare/len(target))
+
+        return self.surf_target, self.xvals, self.yvals
         
     
     def scan_error(self, samples = 50):
