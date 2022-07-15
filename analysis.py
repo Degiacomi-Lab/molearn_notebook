@@ -21,7 +21,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 #edit path as required for your computer (or remove, if you installed molearn via conda-forge)
-#sys.path.insert(0, "C:\\Users\\xdzl45\\workspace\\molearn\\src")
+sys.path.insert(0, "C:\\Users\\xdzl45\\workspace\\molearn\\src")
 from molearn import load_data, Auto_potential, Autoencoder, ResidualBlock
 
 from ipywidgets import HBox, VBox, Layout
@@ -29,6 +29,54 @@ from ipywidgets import widgets
 from tkinter import Tk, filedialog
 import plotly.graph_objects as go
 import nglview as nv
+
+
+
+class DOPE_score(object):
+
+    def __init__(self, mol):
+        
+        alternate_residue_names = dict(CSS=('CYX',))
+        atoms = ' '.join(list(mol.data['name'].unique()))
+        mol.write_pdb('tmp.pdb', conformations=[0])
+        log.level(0,0,0,0,0)
+        env = environ()
+        env.libs.topology.read(file='$(LIB)/top_heav.lib')
+        env.libs.parameters.read(file='$(LIB)/par.lib')
+        self.fast_mdl = complete_pdb(env, 'tmp.pdb')
+        self.fast_fs = selection(self.fast_mdl.chains[0])
+        self.fast_ss = self.fast_fs.only_atom_types(atoms)
+        atom_residue = mol.get_data(columns=['name', 'resname', 'resid'])
+        atom_order = []
+        for i, j in enumerate(self.fast_ss):
+            if i < len(atom_residue):
+                for j_residue_name in alternate_residue_names.get(j.residue.name, (j.residue.name,)):
+                    if [j.name, j_residue_name, j.residue.index] == list(atom_residue[i]):
+                        atom_order.append(i)
+                    else:
+                        where_arg = (atom_residue==(np.array([j.name, j_residue_name, j.residue.index], dtype=object))).all(axis=1)
+                        where = np.where(where_arg)[0]
+                        atom_order.append(int(where))
+                        
+        # check fast dope atoms
+        for i,j in enumerate(self.fast_ss):
+            if i<len(atom_residue):
+                assert self.mol.data['name'][atom_order[i]]==j.name
+        
+    def get_dope(self, coords):
+        # expect coords to be shape [B, N, 3] use .cpu().numpy().copy() before passing here and make sure it is scaled correctly
+        dope_scores = []
+        for frame in coords:
+            frame = frame.astype(float)
+            self.fast_fs.unbuild()
+            for i, j in enumerate(self.fast_ss):
+                if i+1<frame.shape[0]:
+                    j.x, j.y, j.z = frame[self.fast_atom_order[i], :]
+            self.fast_mdl.build(build_method='INTERNAL_COORDINATES', initialize_xyz=False)
+            dope_scores.append(self.fast_fs.assess_dope())
+        return np.array(dope_scores)
+
+
 
 
 class MolearnAnalysis(object):
@@ -40,7 +88,7 @@ class MolearnAnalysis(object):
         training_set, meanval, stdval, atom_names, mol, test0, test1 = load_data(infile,
                                                                                  atoms = atoms,
                                                                                  device = self.device)
-      
+    
         # set residues names with protonated histidines back to generic HIS name (needed by DOPE score function)
         testH = mol.data["resname"].values
         testH[testH == "HIE"] = "HIS"
@@ -81,7 +129,12 @@ class MolearnAnalysis(object):
         
         os.remove("rmsd_matrix.npy")
     
-    
+ 
+    def num_trainable_params(self):
+
+        return sum(p.numel() for p in self.network.parameters() if p.requires_grad)
+
+   
     def load_test(self, infile):
 
         self.test_set, _, _, _, _, _, _ = load_data(infile, atoms = self.atoms, device=self.device)
@@ -169,6 +222,7 @@ class MolearnAnalysis(object):
         experimental function, creating a coloured landscape of RMSD vs single target structure
         target should be a Tensor of a single protein stucture loaded via load_test
         '''
+
         target = target.numpy().flatten()*self.stdval + self.meanval
         
         self.xvals, self.yvals = self._get_sampling_ranges(samples)
@@ -306,7 +360,10 @@ class MolearnGUI(object):
     def on_click(self, trace, points, selector):
         '''
         control display of training set
-        ''' 
+        '''
+        
+        if len(points.xs) == 0:
+            return
 
         # add new waypoint to list
         pt = np.array([[points.xs[0], points.ys[0]]])
@@ -364,7 +421,7 @@ class MolearnGUI(object):
 
         if change.new == "drift":
             try:
-                data = np.log(self.MA.surf_z).T
+                data = self.MA.surf_z.T
             except:
                 return
             
@@ -372,11 +429,21 @@ class MolearnGUI(object):
 
         elif change.new == "RMSD":
             try:
-                data = np.log(self.MA.surf_c).T
+                data = self.MA.surf_c.T
             except:
                 return
             
             self.block0.children[2].readout_format = '.1f'
+
+
+        elif change.new == "target RMSD":
+            try:
+                data = self.MA.surf_target.T
+            except:
+                return
+            
+            self.block0.children[2].readout_format = '.1f'
+
 
         elif change.new == "DOPE":
             try:
@@ -482,6 +549,9 @@ class MolearnGUI(object):
             options.append("RMSD")       
         if hasattr(self.MA, "surf_dope"):
             options.append("DOPE")
+        if hasattr(self.MA, "surf_target"): 
+            options.append("target RMSD")
+        
         if len(options) == 0:
             options.append("none")
         
@@ -549,9 +619,11 @@ class MolearnGUI(object):
 
         # coloured background
         if "drift" in options:
-            sc = np.log(self.MA.surf_z)
+            sc = self.MA.surf_z
+        elif "target RMSD" in options:
+            sc = self.MA.surf_target
         elif "DOPE" in options:
-            sc = np.log(self.MA.surf_dope)
+            sc = self.MA.surf_dope
         else:
             sc = []
             
