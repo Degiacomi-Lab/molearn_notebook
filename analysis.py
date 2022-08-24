@@ -1,6 +1,8 @@
 import sys, os, glob
 from copy import deepcopy
 import time
+import pickle
+from IPython import display
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -332,13 +334,15 @@ class MolearnAnalysis(object):
 
 class MolearnGUI(object):
     
-    def __init__(self, MA):
+    def __init__(self, MA=[]):
         
-        if not isinstance(MA, MolearnAnalysis):
+        if not isinstance(MA, MolearnAnalysis) and MA != []:
             raise Exception(f'Expecting an MolearnAnalysis instance, {type(MA)} found')
-        
-        self.MA = MA
+        else:
+            self.MA = MA
+
         self.waypoints = [] # collection of all saved waypoints
+        
         self.run()
 
         
@@ -395,7 +399,7 @@ class MolearnGUI(object):
             crd = crd.reshape((1, int(len(crd)/2), 2))       
             crd = self.oversample(crd, pts=int(samplebox))
         except Exception as e:
-            self.button_pdb.disabled = False
+            self.button_pdb.disabled = True
             return 
 
         # generate structures along path
@@ -407,7 +411,7 @@ class MolearnGUI(object):
         self.MA.mymol.load_new(gen)
         view = nv.show_mdanalysis(self.MA.mymol)
         view.add_representation("spacefill")
-        display(view)
+        display.display(view)
 
         self.button_pdb.disabled = False
 
@@ -532,8 +536,43 @@ class MolearnGUI(object):
 
         with mda.Writer(fname, protein.n_atoms) as W:
             for ts in self.MA.mymol.trajectory:
-                W.write(protein)    
+                W.write(protein) 
 
+
+    def button_save_state_event(self, check):
+        '''
+        save class state
+        '''
+
+        root = Tk()
+        root.withdraw()                                        # Hide the main window.
+        root.call('wm', 'attributes', '.', '-topmost', True)   # Raise the root to the top of all windows.
+        fname = filedialog.asksaveasfilename(defaultextension="p", filetypes=[("pickle file", "p")])
+
+        if fname == "":
+            return
+
+        pickle.dump([self.MA, self.waypoints], open( fname, "wb" ) )
+
+
+    def button_load_state_event(self, check):
+        '''
+        load class state
+        '''
+
+        root = Tk()
+        root.withdraw()                                        # Hide the main window.
+        root.call('wm', 'attributes', '.', '-topmost', True)   # Raise the root to the top of all windows.
+        fname = filedialog.askopenfilename(defaultextension="p", filetypes=[("picke file", "p")])
+
+        if fname == "":
+            return
+
+        data = pickle.load( open( fname, "rb" ) )
+        self.MA = data[0]
+        self.waypoints = data[1]
+
+        self.run()
 
     #####################################################
 
@@ -602,7 +641,23 @@ class MolearnGUI(object):
 
         self.button_pdb.on_click(self.button_pdb_event)
 
-        
+
+        # button to save state file
+        self.button_save_state = widgets.Button(
+            description= 'Save state',
+            disabled=False, layout=Layout(flex='1 1 0%', width='auto'))
+
+        self.button_save_state.on_click(self.button_save_state_event)
+
+
+        # button to load state file
+        self.button_load_state = widgets.Button(
+            description= 'Load state',
+            disabled=False, layout=Layout(flex='1 1 0%', width='auto'))
+
+        self.button_load_state.on_click(self.button_load_state_event)
+
+
         # latent space range slider
         self.range_slider = widgets.FloatRangeSlider(
             description='cmap range:',
@@ -613,6 +668,14 @@ class MolearnGUI(object):
             readout_format='.1f', layout=Layout(flex='1 1 0%', width='auto'))
 
         self.range_slider.observe(self.range_slider_event, names='value')
+
+
+        if self.MA == []:
+            self.button_save_state.disabled = True
+            self.button_pdb.disabled = True
+            
+        if self.waypoints == []:
+            self.button_pdb.disabled = True
 
         
         ### LATENT SPACE REPRESENTATION ###
@@ -631,7 +694,13 @@ class MolearnGUI(object):
             plot1 = go.Heatmap(x=self.MA.xvals, y=self.MA.yvals, z=sc.T, zmin=np.min(sc), zmax=np.max(sc),
                                colorscale='viridis', name="latent_space")   
         else:
-            xvals, yvals = self.MA._get_sampling_ranges(50)
+
+            if self.MA:
+                xvals, yvals = self.MA._get_sampling_ranges(50)
+            else:               
+                xvals = np.linspace(0, 1, 10)
+                yvals = np.linspace(0, 1, 10)
+                    
             surf_empty = np.zeros((len(xvals), len(yvals)))
             plot1 = go.Heatmap(x=xvals, y=yvals, z=surf_empty, opacity=0.0, showscale=False, name="latent_space")   
                       
@@ -678,7 +747,9 @@ class MolearnGUI(object):
         
         ### WIDGETS ARRANGEMENT ###
         
-        self.block0 = widgets.VBox([self.check_training, self.check_test, self.range_slider, self.drop_background, self.samplebox, self.mybox, self.button_pdb],
+        self.block0 = widgets.VBox([self.check_training, self.check_test, self.range_slider,
+                                    self.drop_background, self.samplebox, self.mybox,
+                                    self.button_pdb, self.button_save_state, self.button_load_state],
                               layout=Layout(flex='1 1 2', width='auto', border="solid"))
 
         self.block1 = widgets.VBox([self.latent], layout=Layout(flex='1 1 auto', width='auto'))
@@ -689,4 +760,6 @@ class MolearnGUI(object):
         self.scene = widgets.HBox([self.block0, self.block1, self.block2])
         self.scene.layout.align_items = 'center'
 
-        display(self.scene)
+        display.clear_output(wait=True)
+        display.display(self.scene)
+            
