@@ -90,16 +90,14 @@ class MolearnAnalysis(object):
         training_set, meanval, stdval, atom_names, mol, test0, test1 = load_data(infile,
                                                                                  atoms = atoms,
                                                                                  device = self.device)
-    
+
+        self.infile = infile
+        
         # set residues names with protonated histidines back to generic HIS name (needed by DOPE score function)
         testH = mol.data["resname"].values
         testH[testH == "HIE"] = "HIS"
         testH[testH == "HID"] = "HIS"
         mol.data["resname"] = testH
-        
-        # create an MDAnalysis instance of input protein
-        mol.write_pdb("tmp.pdb")
-        self.mymol = mda.Universe('tmp.pdb')
 
         self.training_set = training_set
         self.meanval = meanval
@@ -408,8 +406,8 @@ class MolearnGUI(object):
         print(f'{crd.shape[1]} struct. in {time.time()-t:.4f} sec.')
 
         # display generated structures
-        self.MA.mymol.load_new(gen)
-        view = nv.show_mdanalysis(self.MA.mymol)
+        self.mymol.load_new(gen)
+        view = nv.show_mdanalysis(self.mymol)
         view.add_representation("spacefill")
         display.display(view)
 
@@ -531,11 +529,11 @@ class MolearnGUI(object):
         crd = oversample(crd, pts=int(samplebox.value))
 
         gen = generate(network, crd, stdval, meanval)
-        self.MA.mymol.load_new(gen)
-        protein = self.MA.mymol.select_atoms("all")
+        self.mymol.load_new(gen)
+        protein = self.mymol.select_atoms("all")
 
         with mda.Writer(fname, protein.n_atoms) as W:
-            for ts in self.MA.mymol.trajectory:
+            for ts in self.mymol.trajectory:
                 W.write(protein) 
 
 
@@ -568,15 +566,18 @@ class MolearnGUI(object):
         if fname == "":
             return
 
-        data = pickle.load( open( fname, "rb" ) )
-        self.MA = data[0]
-        self.waypoints = data[1]
+        self.MA, self.waypoints = pickle.load( open( fname, "rb" ) )
 
         self.run()
 
     #####################################################
 
     def run(self):
+
+        # create an MDAnalysis instance of input protein (for viewing purposes)
+        if hasattr(self.MA, "mol"):
+            self.MA.mol.write_pdb("tmp.pdb", conformations=[0])
+            self.mymol = mda.Universe('tmp.pdb')
         
         ### MENU ITEMS ###
         
@@ -759,6 +760,10 @@ class MolearnGUI(object):
 
         self.scene = widgets.HBox([self.block0, self.block1, self.block2])
         self.scene.layout.align_items = 'center'
+
+        if len(self.waypoints) > 0:
+            print(self.waypoints, type(self.waypoints))
+            self.mybox.value = " ".join(self.waypoints.flatten().astype(str))
 
         display.clear_output(wait=True)
         display.display(self.scene)
