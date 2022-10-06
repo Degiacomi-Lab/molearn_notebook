@@ -23,10 +23,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 #edit path as required for your computer (or remove, if you installed molearn via conda-forge)
-#sys.path.insert(0, "C:\\Users\\xdzl45\\workspace\\molearn\\src")
-sys.path.insert(0, "/home/wppj21/Workshop/molearn/src")
-#from molearn import load_data, Auto_potential, Autoencoder, ResidualBlock
-import molearn
+sys.path.insert(0, "C:\\Users\\xdzl45\\workspace\\molearn\\src")
+from molearn import load_data, Auto_potential, Autoencoder, ResidualBlock
 
 from ipywidgets import HBox, VBox, Layout
 from ipywidgets import widgets
@@ -34,15 +32,7 @@ from tkinter import Tk, filedialog
 import plotly.graph_objects as go
 import nglview as nv
 
-from scoring import Parallel_DOPE_Score
 
-def as_numpy(tensor):
-    if isinstance(tensor, torch.Tensor):
-        return tensor.data.cpu().numpy()
-    elif isinstance(tensor, np.ndarray):
-        return tensor
-    else:
-        return np.array(tensor)
 
 class DOPE_score(object):
 
@@ -93,82 +83,69 @@ class DOPE_score(object):
 
 class MolearnAnalysis(object):
     
-    def __init__(self,):
-        pass
+    def __init__(self, networkfile, infile, m=2.0, latent_z=2, r=2, atoms = ["CA", "C", "N", "CB", "O"]):
+        
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        
+        training_set, meanval, stdval, atom_names, mol, test0, test1 = load_data(infile,
+                                                                                 atoms = atoms,
+                                                                                 device = self.device)
 
-    def set_train_data(self, data, atomselect="*"):
-        if isinstance(data, str) and data.endswith('.pdb'):
-            d = molearn.PDBData()
-            d.import_pdb(data)
-            d.atomselect(atomselect)
-            d.prepare_dataset()
-            self.training_set = d.dataset.float()
-            self.meanval = d.mean
-            self.stdval = d.std
-            self.atoms = d.atoms
-            self.mol = d.frame()
-        elif isinstance(data, molearn.PDBData):
-            self.training_set = data.dataset.float()
-            self.meanval = data.mean
-            self.stdval = data.std
-            self.atoms = data.atoms
-            self.mol = data.frame()
-        else:
-            raise NotImplementedError('No other data typethan PDBData has been implemented for this method')
+        self.infile = infile
+        
+        # set residues names with protonated histidines back to generic HIS name (needed by DOPE score function)
+        testH = mol.data["resname"].values
+        testH[testH == "HIE"] = "HIS"
+        testH[testH == "HID"] = "HIS"
+        mol.data["resname"] = testH
 
-    def set_network(self, network):
-        self.network = network
+        self.training_set = training_set
+        self.meanval = meanval
+        self.stdval = stdval
+        self.mol = mol
+        self.atoms = atoms
+        
+        checkpoint = torch.load(networkfile, map_location=self.device)
+        self.network = Autoencoder(m=m, latent_z=latent_z, r=r).to(self.device)
+        self.network.load_state_dict(checkpoint['model_state_dict'])
+
+        for modulelist in [self.network.encoder, self.network.decoder]:
+            for layer in modulelist:
+                if type(layer)==torch.nn.BatchNorm1d:
+                    layer.momentum=1.0
+                elif type(layer)==ResidualBlock:
+                    for rlayer in layer.conv_block:
+                        if type(rlayer)==torch.nn.BatchNorm1d:
+                            rlayer.momentum=1.0
+
+        with torch.no_grad():
+            self.network.decode(self.network.encode(self.training_set.float()))
+
         self.network.eval()
-        self.device = next(network.parameters()).device
-
-
-    def set_test_data(self, data, use_training_parameters=False):
-        if isinstance(data, str) and data.endswith('.pdb'):
-            d = molearn.PDBData()
-            d.import_pdb(data)
-            d.atomselect(self.atoms)
-            if use_training_parameters:
-                d.std = self.stdval
-                d.mean = self.meanval
-            d.prepare_dataset()
-            self.test_set = d.dataset.float()
-        elif isinstance(data, molearn.PDBData):
-            self.test_set = data.dataset.float()
-        if self.test_set.shape[2] != self.training_set.shape[2]:
-            raise Exception(f'number of d.o.f. differs: training set has {self.training_set.shape[2]}, test set has {test_set.shape[2]}')
+        
+        with torch.no_grad():
+            z = self.network.encode(self.training_set.float())
+            self.z_training = z.data.cpu().numpy()[:, :, 0]
+        
+        os.remove("rmsd_matrix.npy")
+    
  
     def num_trainable_params(self):
 
         return sum(p.numel() for p in self.network.parameters() if p.requires_grad)
 
+   
+    def load_test(self, infile):
 
-    @property
-    def training_set_z(self):
-        if not hasattr(self, '_training_set_z'):
-            with torch.no_grad():
-                self._training_set_z = self.network.encode(self.training_set.to(self.device))
-        return self._training_set_z
+        self.test_set, _, _, _, _, _, _ = load_data(infile, atoms = self.atoms, device=self.device)
+        if self.test_set.shape[2] != self.training_set.shape[2]:
+            raise Exception(f'number of d.o.f. differs: training set has {self.training_set.shape[2]}, test set has {test_set.shape[2]}')
 
-    @property
-    def training_set_decoded(self):
-        if not hasattr(self, '_training_set_decoded'):
-            with torch.no_grad():
-                self._training_set_decoded = self.network.decode(self.training_set_z.to(self.device))[:,:,:self.training_set.shape[2]]
-        return self._training_set_decoded
-
-    @property
-    def test_set_z(self):
-        if not hasattr(self, '_test_set_z'):
-            with torch.no_grad():
-                self._test_set_z = self.network.encode(self.test_set.to(self.device))
-        return self._test_set_z
-
-    @property
-    def test_set_decoded(self):
-        if not hasattr(self, '_test_set_decoded'):
-            with torch.no_grad():
-                self._test_set_decoded = self.network.decode(self.test_set_z.to(self.device))[:,:,:self.test_set.shape[2]]
-        return self._test_set_decoded
+        with torch.no_grad():
+            z = self.network.encode(self.test_set.float())
+            self.z_test = z.data.cpu().numpy()[:, :, 0]
+            
+        return self.test_set, self.z_test
 
 
     def get_error(self, dataset="", align=False):
@@ -176,22 +153,17 @@ class MolearnAnalysis(object):
         Calculate the reconstruction error of a dataset encoded and decoded by a trained neural network
         '''
 
-        if dataset == "" or dataset =="training_set":
+        if dataset == "":
             dataset = self.training_set
-            z = self.training_set_z
-            decoded = self.training_set_decoded
-        elif dataset == "test_set":
-            dataset = self.test_set
-            z = self.test_set_z
-            decoded = self.test_set_decoded
-        else:
-            z = self.network.encode(dataset.float())
-            decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
+
+        z = self.network.encode(dataset.float())
+        decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
 
         err = []
         for i in range(dataset.shape[0]):
-            crd_ref = as_numpy(dataset[i].permute(1,0).unsqueeze(0))*self.stdval + self.meanval
-            crd_mdl = as_numpy(decoded[i].permute(1,0).unsqueeze(0))[:, :dataset.shape[2]]*self.stdval + self.meanval #clip the padding of models  
+
+            crd_ref = dataset[i].permute(1,0).unsqueeze(0).data.cpu().numpy()*self.stdval + self.meanval
+            crd_mdl = decoded[i].permute(1,0).unsqueeze(0).data.cpu().numpy()[:, :dataset.shape[2]]*self.stdval + self.meanval #clip the padding of models  
 
             if align: # use Molecule Biobox class to calculate RMSD
                 self.mol.coordinates = deepcopy(crd_ref)
@@ -206,35 +178,41 @@ class MolearnAnalysis(object):
         return np.array(err)
 
 
-    def get_dope(self, dataset="", refined=True):
+    def get_dope(self, dataset=""):
 
-        if dataset == "" or dataset == "training_set":
-            dataset = self.training_set
-            z = self.training_set_z
-            decoded = self.training_set_decoded
-        elif dataset == "test_set":
-            dataset = self.test_set
-            z = self.test_set_z
-            decoded = self.test_set_decoded
-        else:
-            z = self.network.encode(dataset.float())
-            decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
+        if dataset == "":
+            dataset = self.training_set    
 
-        
-        dope_dataset = self.get_all_dope_score(dataset)
-        dope_decoded = self.get_all_dope_score(decoded)
+        z = self.network.encode(dataset.float())
+        decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
 
-        if refined:
-            return dope_dataset, dope_decoded
-        else:
-            return (dope_dataset,), (dope_decoded,)
+        dope_dataset = []
+        dope_decoded = []
+        for i in range(dataset.shape[0]):
+
+            # calculate DOPE score of input dataset
+            crd_ref = dataset[i].permute(1,0).unsqueeze(0).data.cpu().numpy()*self.stdval + self.meanval
+            self.mol.coordinates = deepcopy(crd_ref)
+            self.mol.write_pdb("tmp.pdb")
+            s = self._dope_score("tmp.pdb")
+            dope_dataset.append(s)
+
+            # calculate DOPE score of decoded counterpart
+            crd_mdl = decoded[i].permute(1,0).unsqueeze(0).data.cpu().numpy()[:, :dataset.shape[2]]*self.stdval + self.meanval  
+            self.mol.coordinates = deepcopy(crd_mdl)
+            self.mol.write_pdb("tmp.pdb")
+            s = self._dope_score("tmp.pdb")
+            dope_decoded.append(s)
+
+        return dope_dataset, dope_decoded
+
 
     def _get_sampling_ranges(self, samples):
         
-        bx = (np.max(as_numpy(self.training_set_z)[:, 0]) - np.min(as_numpy(self.training_set_z)[:, 0]))*0.1 # 10% margins on x-axis
-        by = (np.max(as_numpy(self.training_set_z)[:, 1]) - np.min(as_numpy(self.training_set_z)[:, 1]))*0.1 # 10% margins on y-axis
-        xvals = np.linspace(np.min(as_numpy(self.training_set_z)[:, 0])-bx, np.max(as_numpy(self.training_set_z)[:, 0])+bx, samples)
-        yvals = np.linspace(np.min(as_numpy(self.training_set_z)[:, 1])-by, np.max(as_numpy(self.training_set_z)[:, 1])+by, samples)
+        bx = (np.max(self.z_training[:, 0]) - np.min(self.z_training[:, 0]))*0.1 # 10% margins on x-axis
+        by = (np.max(self.z_training[:, 1]) - np.min(self.z_training[:, 1]))*0.1 # 10% margins on y-axis
+        xvals = np.linspace(np.min(self.z_training[:, 0])-bx, np.max(self.z_training[:, 0])+bx, samples)
+        yvals = np.linspace(np.min(self.z_training[:, 1])-by, np.max(self.z_training[:, 1])+by, samples)
     
         return xvals, yvals
         
@@ -303,48 +281,11 @@ class MolearnAnalysis(object):
         return self.surf_z, self.surf_c, self.xvals, self.yvals
 
 
-    def _dope_score(self, frame, refine = True):
-        '''
-        returns multiprocessing AsyncResult
-        AsyncResult.get() will return the result
-        '''
-        if not hasattr(self, 'dope_score_class'):
-            self.dope_score_class = Parallel_DOPE_Score(self.mol)
-
-        assert len(frame.shape) == 2, f'We wanted 2D data but got {len(frame.shape)} dimensions'
-        if frame.shape[0] == 3:
-            f = frame.permute(1,0)
-        else:
-            assert frame.shape[1] ==3
-            f = frame
-        if isinstance(f,torch.Tensor):
-            f = f.data.cpu().numpy()
-        f *= self.stdval
-
-        return self.dope_score_class.get_score(f, refine = refine)
-
-    def get_all_dope_score(self, tensor, refine = True):
-        '''
-        applies _dope_score to an array of data
-        '''
-        results = []
-        for f in tensor:
-            results.append(self._dope_score(f, refine = refine))
-        results = np.array([r.get() for r in results])
-        if refine:
-            return results[:,0], results[:,1]
-        return results
-
-    def reference_dope_score(self, frame):
-        '''
-        give a numpy array with shape [1, N, 3], already scaled to the correct size
-        '''
-        self.mol.coordinates = deepcopy(frame)
-        self.mol.write_pdb('tmp.pdb')
+    def _dope_score(self, fname):
         env = Environ()
         env.libs.topology.read(file='$(LIB)/top_heav.lib')
         env.libs.parameters.read(file='$(LIB)/par.lib')
-        mdl = complete_pdb(env, 'tmp.pdb')
+        mdl = complete_pdb(env, fname)
         atmsel = Selection(mdl.chains[0])
         score = atmsel.assess_dope()
         return score
@@ -352,26 +293,29 @@ class MolearnAnalysis(object):
 
     def scan_dope(self, samples = 50):
 
-        if hasattr(self, "surf_dope_refined") and hasattr(self, "surf_dope_unrefined"):
-            if samples == len(self.surf_dope_refined) and samples == len(self.surf_dope_unrefined):
-                return self.surf_dope_unrefined, self.surf_dope_refined, self.xvals, self.yvals
+        if hasattr(self, "surf_dope"):
+            if samples == len(self.surf_dope):
+                return self.surf_dope, self.xvals, self.yvals
         
         self.xvals, self.yvals = self._get_sampling_ranges(samples)
         
-        X, Y = torch.meshgrid(torch.tensor(self.xvals), torch.tensor(self.yvals))
-        z_in = torch.stack((X,Y), dim=2).view(samples*samples,1,2,1).float()
-
-        #surf_dope = np.zeros((len(self.xvals)*len(self.yvals),))
-        results = []
+        surf_dope = np.zeros((len(self.xvals), len(self.yvals)))
         with torch.no_grad():
-            for i, j in enumerate(z_in):
-                structure = self.network.decode(j)[:,:,:self.training_set.shape[2]]
-                results.append(self._dope_score(structure[0], refine = True))
-        results = np.array([r.get() for r in results])
-        self.surf_dope_unrefined = results[:,0].reshape(len(self.xvals), len(self.yvals))
-        self.surf_dope_refined = results[:, 1].reshape(len(self.xvals), len(self.yvals))
-        
-        return self.surf_dope_unrefined, self.surf_dope_refined, self.xvals, self.yvals
+
+            for x, i in enumerate(self.xvals):
+                for y, j in enumerate(self.yvals):
+
+                    # take latent space coordinate (1) and decode it (2)
+                    z1 = torch.tensor([[[i,j]]]).float()
+                    s1 = self.network.decode(z1)[:,:,:self.training_set.shape[2]]
+
+                    crd_mdl = s1[0].permute(1,0).unsqueeze(0).data.cpu().numpy()[:, :self.training_set.shape[2]]*self.stdval + self.meanval  
+                    self.mol.coordinates = deepcopy(crd_mdl)
+                    self.mol.write_pdb("tmp.pdb")
+                    surf_dope[x,y] = self._dope_score("tmp.pdb")
+
+        self.surf_dope = surf_dope
+        return surf_dope, self.xvals, self.yvals
 
     
     def generate(self, crd):
@@ -503,17 +447,9 @@ class MolearnGUI(object):
             self.block0.children[2].readout_format = '.1f'
 
 
-        elif change.new == "DOPE_unrefined":
+        elif change.new == "DOPE":
             try:
-                data = self.MA.surf_dope_unrefined.T
-            except:
-                return
-            self.block0.children[2].readout_format = 'd'
-
-
-        elif change.new == "DOPE_refined":
-            try:
-                data = self.MA.surf_dope_refined.T
+                data = self.MA.surf_dope.T
             except:
                 return
             self.block0.children[2].readout_format = 'd'
@@ -651,10 +587,8 @@ class MolearnGUI(object):
             options.append("drift")
         if hasattr(self.MA, "surf_c"):
             options.append("RMSD")       
-        if hasattr(self.MA, "surf_dope_unrefined"):
-            options.append("DOPE_unrefined")
-        if hasattr(self.MA, "surf_dope_refined"):
-            options.append("DOPE_refined")
+        if hasattr(self.MA, "surf_dope"):
+            options.append("DOPE")
         if hasattr(self.MA, "surf_target"): 
             options.append("target RMSD")
         
@@ -752,10 +686,8 @@ class MolearnGUI(object):
             sc = self.MA.surf_z
         elif "target RMSD" in options:
             sc = self.MA.surf_target
-        elif "DOPE_unrefined" in options:
-            sc = self.MA.surf_dope_unrefined
-        elif "DOPE_refined" in options:
-            sc = self.MA.surf_dope_refined
+        elif "DOPE" in options:
+            sc = self.MA.surf_dope
         else:
             sc = []
             
@@ -774,9 +706,9 @@ class MolearnGUI(object):
             plot1 = go.Heatmap(x=xvals, y=yvals, z=surf_empty, opacity=0.0, showscale=False, name="latent_space")   
                       
         # training set
-        if hasattr(self.MA, "training_set_z"):
+        if hasattr(self.MA, "z_training"):
             color = "white" if len(sc)>0 else "black"
-            plot2 = go.Scatter(x=as_numpy(self.MA.training_set_z)[:, 0], y=as_numpy(self.MA.training_set_z)[:, 1],
+            plot2 = go.Scatter(x=self.MA.z_training[:, 0], y=self.MA.z_training[:, 1],
                    showlegend=False, opacity=0.9, mode="markers",
                    marker=dict(color=color, size=5), name="training", visible=False)
         else:
@@ -784,8 +716,8 @@ class MolearnGUI(object):
             self.check_training.disabled = True
             
         # test set
-        if hasattr(self.MA, "test_set_z"):
-            plot3 = go.Scatter(x=as_numpy(self.MA.test_set_z)[:, 0], y=as_numpy(self.MA.test_set_z)[:, 1],
+        if hasattr(self.MA, "z_test"):
+            plot3 = go.Scatter(x=self.MA.z_test[:, 0], y=self.MA.z_test[:, 1],
                    showlegend=False, opacity=0.9, mode="markers",
                    marker=dict(color='silver', size=5), name="test", visible=False)
         else:
