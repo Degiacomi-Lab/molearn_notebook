@@ -34,7 +34,7 @@ from tkinter import Tk, filedialog
 import plotly.graph_objects as go
 import nglview as nv
 
-from scoring import Parallel_DOPE_Score
+from scoring import Parallel_DOPE_Score, Parallel_Ramachandran_Score
 
 def as_numpy(tensor):
     if isinstance(tensor, torch.Tensor):
@@ -102,13 +102,13 @@ class MolearnAnalysis(object):
             d.import_pdb(data)
             d.atomselect(atomselect)
             d.prepare_dataset()
-            self.training_set = d.dataset.float()
+            self._training_set = d.dataset.float()
             self.meanval = d.mean
             self.stdval = d.std
             self.atoms = d.atoms
             self.mol = d.frame()
         elif isinstance(data, molearn.PDBData):
-            self.training_set = data.dataset.float()
+            self._training_set = data.dataset.float()
             self.meanval = data.mean
             self.stdval = data.std
             self.atoms = data.atoms
@@ -131,15 +131,19 @@ class MolearnAnalysis(object):
                 d.std = self.stdval
                 d.mean = self.meanval
             d.prepare_dataset()
-            self.test_set = d.dataset.float()
+            self._test_set = d.dataset.float()
         elif isinstance(data, molearn.PDBData):
-            self.test_set = data.dataset.float()
-        if self.test_set.shape[2] != self.training_set.shape[2]:
-            raise Exception(f'number of d.o.f. differs: training set has {self.training_set.shape[2]}, test set has {test_set.shape[2]}')
- 
+            self._test_set = data.dataset.float()
+        if self._test_set.shape[2] != self.training_set.shape[2]:
+            raise Exception(f'number of d.o.f. differs: training set has {self.training_set.shape[2]}, test set has {self._test_set.shape[2]}')
+
     def num_trainable_params(self):
 
         return sum(p.numel() for p in self.network.parameters() if p.requires_grad)
+
+    @property
+    def training_set(self):
+        return self._training_set.clone()
 
 
     @property
@@ -147,28 +151,31 @@ class MolearnAnalysis(object):
         if not hasattr(self, '_training_set_z'):
             with torch.no_grad():
                 self._training_set_z = self.network.encode(self.training_set.to(self.device))
-        return self._training_set_z
+        return self._training_set_z.clone()
 
+    @property
+    def test_set(self):
+        return self._test_set.data
     @property
     def training_set_decoded(self):
         if not hasattr(self, '_training_set_decoded'):
             with torch.no_grad():
                 self._training_set_decoded = self.network.decode(self.training_set_z.to(self.device))[:,:,:self.training_set.shape[2]]
-        return self._training_set_decoded
+        return self._training_set_decoded.clone()
 
     @property
     def test_set_z(self):
         if not hasattr(self, '_test_set_z'):
             with torch.no_grad():
                 self._test_set_z = self.network.encode(self.test_set.to(self.device))
-        return self._test_set_z
+        return self._test_set_z.clone()
 
     @property
     def test_set_decoded(self):
         if not hasattr(self, '_test_set_decoded'):
             with torch.no_grad():
                 self._test_set_decoded = self.network.decode(self.test_set_z.to(self.device))[:,:,:self.test_set.shape[2]]
-        return self._test_set_decoded
+        return self._test_set_decoded.clone()
 
 
     def get_error(self, dataset="", align=False):
@@ -185,8 +192,9 @@ class MolearnAnalysis(object):
             z = self.test_set_z
             decoded = self.test_set_decoded
         else:
-            z = self.network.encode(dataset.float())
-            decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
+            with torch.no_grad():
+                z = self.network.encode(dataset.float())
+                decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
 
         err = []
         for i in range(dataset.shape[0]):
@@ -217,8 +225,9 @@ class MolearnAnalysis(object):
             z = self.test_set_z
             decoded = self.test_set_decoded
         else:
-            z = self.network.encode(dataset.float())
-            decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
+            with torch.no_grad():
+                z = self.network.encode(dataset.float())
+                decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
 
         
         dope_dataset = self.get_all_dope_score(dataset)
@@ -228,6 +237,25 @@ class MolearnAnalysis(object):
             return dope_dataset, dope_decoded
         else:
             return (dope_dataset,), (dope_decoded,)
+
+    def get_ramachandran(self, dataset=""):
+        if dataset == "" or dataset == "training_set":
+            dataset = self.training_set
+            z = self.training_set_z
+            decoded = self.training_set_decoded
+        elif dataset == "test_set":
+            dataset = self.test_set
+            z = self.test_set_z
+            decoded = self.test_set_decoded
+        else:
+            with torch.no_grad():
+                z = self.network.encode(dataset.float())
+                decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
+
+        ramachandran_dataset = self.get_all_ramachandran_score(dataset)
+        ramachandran_decoded = self.get_all_ramachandran_score(decoded)
+        return ramachandran_dataset, ramachandran_decoded
+
 
     def _get_sampling_ranges(self, samples):
         
@@ -302,6 +330,24 @@ class MolearnAnalysis(object):
         
         return self.surf_z, self.surf_c, self.xvals, self.yvals
 
+    def _ramachandran_score(self, frame):
+        '''
+        returns multiprocessing AsyncResult
+        AsyncResult.get() will return the result
+        '''
+        if not hasattr(self, 'ramachandran_score_class'):
+            self.ramachandran_score_class = Parallel_Ramachandran_Score(self.mol) #Parallel_Ramachandran_Score(self.mol)
+        assert len(frame.shape) == 2, f'We wanted 2D data but got {len(frame.shape)} dimensions'
+        if frame.shape[0] == 3:
+            f = frame.permute(1,0)
+        else:
+            assert frame.shape[1] == 3
+            f = frame
+        if isinstance(f, torch.Tensor):
+            f = f.data.cpu().numpy()
+
+        return self.ramachandran_score_class.get_score(f*self.stdval)
+
 
     def _dope_score(self, frame, refine = True):
         '''
@@ -319,9 +365,19 @@ class MolearnAnalysis(object):
             f = frame
         if isinstance(f,torch.Tensor):
             f = f.data.cpu().numpy()
-        f *= self.stdval
 
-        return self.dope_score_class.get_score(f, refine = refine)
+        return self.dope_score_class.get_score(f*self.stdval, refine = refine)
+
+
+    def get_all_ramachandran_score(self, tensor):
+        '''
+        applies _ramachandran_score to an array of data
+        '''
+        results = []
+        for f in tensor:
+            results.append(self._ramachandran_score(f))
+        results = np.array([r.get() for r in results])
+        return results
 
     def get_all_dope_score(self, tensor, refine = True):
         '''
@@ -372,6 +428,28 @@ class MolearnAnalysis(object):
         self.surf_dope_refined = results[:, 1].reshape(len(self.xvals), len(self.yvals))
         
         return self.surf_dope_unrefined, self.surf_dope_refined, self.xvals, self.yvals
+
+
+    def scan_ramachandran(self, samples = 50):
+        if hasattr(self, "surf_ramachandran"):
+            if samples == len(self.surf_ramachandran):
+                return self.surf_ramachandran_favored, self.surf_ramachandran_allowed, self.surf_ramachandran_outliers
+        self.xvals, self.yvals = self._get_sampling_ranges(samples)
+        X, Y = torch.meshgrid(torch.tensor(self.xvals), torch.tensor(self.yvals))
+        z_in = torch.stack((X,Y), dim=2).view(samples*samples,1,2,1).float()
+
+        results = []
+        with torch.no_grad():
+            for i,j in enumerate(z_in):
+                structure = self.network.decode(j)[:,:,:self.training_set.shape[2]]
+                results.append(self._ramachandran_score(structure[0]))
+        results = np.array([r.get() for r in results])
+        self.surf_ramachandran_favored = results[:,0].reshape(len(self.xvals), len(self.yvals))
+        self.surf_ramachandran_allowed = results[:,1].reshape(len(self.xvals), len(self.yvals))
+        self.surf_ramachandran_outliers = results[:,2].reshape(len(self.xvals), len(self.yvals))
+        self.surf_ramachandran_total = results[:,3].reshape(len(self.xvals), len(self.yvals))
+
+        return self.surf_ramachandran_favored, self.xvals, self.yvals
 
     
     def generate(self, crd):
@@ -517,7 +595,26 @@ class MolearnGUI(object):
             except:
                 return
             self.block0.children[2].readout_format = 'd'
-            
+        
+        elif change.new == "ramachandran_favored":
+            try:
+                data = self.MA.surf_ramachandran_favored.T
+            except:
+                return
+            self.block0.children[2].readout_format = 'd'
+
+        elif change.new == "ramachandran_allowed":
+            try:
+                data = self.MA.surf_ramachandran_allowed.T
+            except:
+                return
+            self.block0.children[2].readout_format = 'd'
+        elif change.new == "ramachandran_outliers":
+            try:
+                data = self.MA.surf_ramachandran_outliers.T
+            except:
+                return
+            self.block0.children[2].readout_format = 'd'
                 
         self.latent.data[0].z = data
         self.latent.data[0].zmin = np.min(data)
@@ -657,6 +754,12 @@ class MolearnGUI(object):
             options.append("DOPE_refined")
         if hasattr(self.MA, "surf_target"): 
             options.append("target RMSD")
+        if hasattr(self.MA, "surf_ramachandran_favored"):
+            options.append("ramachandran_favored")
+        if hasattr(self.MA, "surf_ramachandran_allowed"):
+            options.append("ramachandran_allowed")
+        if hasattr(self.MA, "surf_ramachandran_outliers"):
+            options.append("ramachandran_outliers")
         
         if len(options) == 0:
             options.append("none")
@@ -756,6 +859,12 @@ class MolearnGUI(object):
             sc = self.MA.surf_dope_unrefined
         elif "DOPE_refined" in options:
             sc = self.MA.surf_dope_refined
+        elif "ramachandran_favored" in options:
+            sc = self.MA.surf_ramachandran_favored
+        elif "ramachandran_allowed" in options:
+            sc = self.MA.surf_ramachandran_allowed
+        elif "ramachandran_outliers" in options:
+            sc = self.MA.surf_ramachandran_outliers
         else:
             sc = []
             
