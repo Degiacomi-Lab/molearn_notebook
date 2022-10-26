@@ -685,11 +685,11 @@ class MolearnGUI(object):
         if fname == "":
             return
 
-        crd = np.array(mybox.value.split()).astype(float)
+        crd = np.array(self.mybox.value.split()).astype(float)
         crd = crd.reshape((1, int(len(crd)/2), 2))       
-        crd = oversample(crd, pts=int(samplebox.value))
+        crd = self.oversample(crd, pts=int(self.samplebox.value))
 
-        gen = generate(network, crd, stdval, meanval)
+        gen = self.MA.generate(crd)
         self.mymol.load_new(gen)
         protein = self.mymol.select_atoms("all")
 
