@@ -15,17 +15,12 @@ from modeller.scripts import complete_pdb
 
 import MDAnalysis as mda
 
-
 import warnings
 warnings.filterwarnings("ignore")
 
-#edit path as required for your computer (or remove, if you installed molearn via conda-forge)
-#sys.path.insert(0, "C:\\Users\\xdzl45\\workspace\\molearn\\src")
-#sys.path.insert(0, "/home/wppj21/Workshop/molearn/src")
-
 import molearn
 
-from ipywidgets import Layout #HBox, VBox,
+from ipywidgets import Layout
 from ipywidgets import widgets
 from tkinter import Tk, filedialog
 import plotly.graph_objects as go
@@ -48,7 +43,7 @@ class DOPE_score(object):
         alternate_residue_names = dict(CSS=('CYX',))
         atoms = ' '.join(list(mol.data['name'].unique()))
         mol.write_pdb('tmp.pdb', conformations=[0])
-        log.level(0,0,0,0,0)
+        log.level(0, 0, 0, 0, 0)
         env = environ()
         env.libs.topology.read(file='$(LIB)/top_heav.lib')
         env.libs.parameters.read(file='$(LIB)/par.lib')
@@ -73,7 +68,8 @@ class DOPE_score(object):
                 assert self.mol.data['name'][atom_order[i]]==j.name
         
     def get_dope(self, coords):
-        # expect coords to be shape [B, N, 3] use .cpu().numpy().copy() before passing here and make sure it is scaled correctly
+        # expect coords to be shape [B, N, 3] use .cpu().numpy().copy()
+        #before passing here and make sure it is scaled correctly
         dope_scores = []
         for frame in coords:
             frame = frame.astype(float)
@@ -86,7 +82,7 @@ class DOPE_score(object):
         return np.array(dope_scores)
 
 
-
+###############################################################################
 
 class MolearnAnalysis(object):
     
@@ -491,7 +487,7 @@ class MolearnAnalysis(object):
 
         return s*self.stdval + self.meanval
 
-
+###############################################################################
 
 class MolearnGUI(object):
     
@@ -535,7 +531,7 @@ class MolearnGUI(object):
         if len(self.waypoints) == 0:
             self.waypoints = pt    
         else:
-            self.waypoints = np.concatenate((self.waypoints, pt))     
+            self.waypoints = np.concatenate((self.waypoints, pt))
 
         # update latent space plot
         self.latent.data[3].x = self.waypoints[:, 0]
@@ -548,6 +544,7 @@ class MolearnGUI(object):
             self.mybox.value = " ".join(pt)
         except:
             return
+        
 
     def interact_3D(self, mybox, samplebox):
         '''
@@ -613,14 +610,15 @@ class MolearnGUI(object):
                 data = self.MA.surf_dope_unrefined.T
             except:
                 return
+            
             self.block0.children[2].readout_format = 'd'
-
 
         elif change.new == "DOPE_refined":
             try:
                 data = self.MA.surf_dope_refined.T
             except:
                 return
+            
             self.block0.children[2].readout_format = 'd'
         
         elif change.new == "ramachandran_favored":
@@ -628,6 +626,7 @@ class MolearnGUI(object):
                 data = self.MA.surf_ramachandran_favored.T
             except:
                 return
+            
             self.block0.children[2].readout_format = 'd'
 
         elif change.new == "ramachandran_allowed":
@@ -635,26 +634,40 @@ class MolearnGUI(object):
                 data = self.MA.surf_ramachandran_allowed.T
             except:
                 return
+            
             self.block0.children[2].readout_format = 'd'
+            
         elif change.new == "ramachandran_outliers":
             try:
                 data = self.MA.surf_ramachandran_outliers.T
             except:
                 return
+            
             self.block0.children[2].readout_format = 'd'
+            
         elif "custom" in change.new:
             mykey = change.new.split(":")[1]
             try:
                 data = self.MA.custom_data[mykey].T
             except Exception:
-                return            
+                return      
+            
             self.block0.children[2].readout_format = 'd'
-                    
+                 
         self.latent.data[0].z = data
-        self.latent.data[0].zmin = np.min(data)
-        self.latent.data[0].zmax = np.max(data)
-        self.block0.children[2].min = np.min(data)
-        self.block0.children[2].max = np.max(data)
+        
+        # step below necessary to avoid situations whereby temporarily min>max
+        try:
+            self.latent.data[0].zmin = np.min(data)
+            self.latent.data[0].zmax = np.max(data)
+            self.block0.children[2].min = np.min(data)
+            self.block0.children[2].max = np.max(data)
+        except:
+            self.latent.data[0].zmax = np.max(data)
+            self.latent.data[0].zmin = np.min(data)
+            self.block0.children[2].max = np.max(data)
+            self.block0.children[2].min = np.min(data)
+                
         self.block0.children[2].value = (np.min(data), np.max(data))
             
         self.latent.update()
@@ -902,6 +915,12 @@ class MolearnGUI(object):
             sc = self.MA.surf_ramachandran_allowed
         elif "ramachandran_outliers" in options:
             sc = self.MA.surf_ramachandran_outliers
+        elif len(options)>0:
+            if "custom" in options[0]:
+                label = options[0].split(":")[1]
+                sc = self.MA.custom[label]
+            else:
+                sc = []
         else:
             sc = []
             
@@ -922,16 +941,19 @@ class MolearnGUI(object):
         # training set
         if hasattr(self.MA, "training_set_z"):
             color = "white" if len(sc)>0 else "black"
-            plot2 = go.Scatter(x=as_numpy(self.MA.training_set_z)[:, 0], y=as_numpy(self.MA.training_set_z)[:, 1],
+            plot2 = go.Scatter(x=as_numpy(self.MA.training_set_z)[:, 0].flatten(),
+                               y=as_numpy(self.MA.training_set_z)[:, 1].flatten(),
                    showlegend=False, opacity=0.9, mode="markers",
                    marker=dict(color=color, size=5), name="training", visible=False)
         else:
+            print("no data available")
             plot2 = go.Scatter(x=[], y=[])
             self.check_training.disabled = True
             
         # test set
         if hasattr(self.MA, "test_set_z"):
-            plot3 = go.Scatter(x=as_numpy(self.MA.test_set_z)[:, 0], y=as_numpy(self.MA.test_set_z)[:, 1],
+            plot3 = go.Scatter(x=as_numpy(self.MA.test_set_z)[:, 0].flatten(),
+                               y=as_numpy(self.MA.test_set_z)[:, 1].flatten(),
                    showlegend=False, opacity=0.9, mode="markers",
                    marker=dict(color='silver', size=5), name="test", visible=False)
         else:
