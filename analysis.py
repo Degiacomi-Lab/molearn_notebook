@@ -28,6 +28,7 @@ import nglview as nv
 
 from scoring import Parallel_DOPE_Score, Parallel_Ramachandran_Score
 
+
 def as_numpy(tensor):
     if isinstance(tensor, torch.Tensor):
         return tensor.data.cpu().numpy()
@@ -35,6 +36,7 @@ def as_numpy(tensor):
         return tensor
     else:
         return np.array(tensor)
+
 
 class DOPE_score(object):
 
@@ -243,7 +245,7 @@ class MolearnAnalysis(object):
         else:
             with torch.no_grad():
                 z = self.network.encode(dataset.float())
-                decoded = self.network.decode(z)[:,:,:dataset.shape[2]]
+                decoded = self.network.decode(z)[:, :, :dataset.shape[2]]
 
         ramachandran_dataset = self.get_all_ramachandran_score(dataset)
         ramachandran_decoded = self.get_all_ramachandran_score(decoded)
@@ -316,12 +318,12 @@ class MolearnAnalysis(object):
 
                     surf_z[x,y] = np.sum((z2.numpy().flatten()-z1.numpy().flatten())**2) # Latent space L2, i.e. (1) vs (3)
                     surf_c[x,y] = np.sum((s2.numpy().flatten()-s1.numpy().flatten())**2) # Cartesian L2, i.e. (2) vs (4)
-
-                    
+        
         self.surf_c = np.sqrt(surf_c)
         self.surf_z = np.sqrt(surf_z)
         
         return self.surf_z, self.surf_c, self.xvals, self.yvals
+
 
     def _ramachandran_score(self, frame):
         '''
@@ -408,7 +410,7 @@ class MolearnAnalysis(object):
         self.xvals, self.yvals = self._get_sampling_ranges(samples)
         
         X, Y = torch.meshgrid(torch.tensor(self.xvals), torch.tensor(self.yvals))
-        z_in = torch.stack((X,Y), dim=2).view(samples*samples,1,2,1).float()
+        z_in = torch.stack((X,Y), dim=2).view(samples*samples, 1, 2, 1).float()
 
         #surf_dope = np.zeros((len(self.xvals)*len(self.yvals),))
         results = []
@@ -918,7 +920,7 @@ class MolearnGUI(object):
         elif len(options)>0:
             if "custom" in options[0]:
                 label = options[0].split(":")[1]
-                sc = self.MA.custom[label]
+                sc = self.MA.custom_data[label]
             else:
                 sc = []
         else:
