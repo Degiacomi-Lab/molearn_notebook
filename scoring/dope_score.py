@@ -39,13 +39,15 @@ class DOPE_Score:
         self.fast_ss = self.fast_fs.only_atom_types(atoms)
         atom_residue = _mol.get_data(columns=['name', 'resname', 'resid'])
         atom_order = []
+        first_index = next(iter(self.fast_ss)).residue.index
+        offset = atom_residue[0,2]-first_index
         for i, j in enumerate(self.fast_ss):
             if i < len(atom_residue):
                 for j_residue_name in alternate_residue_names.get(j.residue.name, (j.residue.name,)):
-                    if [j.name, j_residue_name, j.residue.index] == list(atom_residue[i]):
+                    if [j.name, j_residue_name, j.residue.index+offset] == list(atom_residue[i]):
                         atom_order.append(i)
                     else:
-                        where_arg = (atom_residue==(np.array([j.name, j_residue_name, j.residue.index], dtype=object))).all(axis=1)
+                        where_arg = (atom_residue==(np.array([j.name, j_residue_name, j.residue.index+offset], dtype=object))).all(axis=1)
                         where = np.where(where_arg)[0]
                         atom_order.append(int(where))
         self.fast_atom_order = atom_order
@@ -104,6 +106,7 @@ def process_dope(coords, kwargs):
 
 class Parallel_DOPE_Score():
     def __init__(self, mol):
+        self.mol = deepcopy(mol)
         score = DOPE_Score
         ctx = get_context('spawn')
         self.pool = ctx.Pool(initializer=set_global_score,
@@ -111,6 +114,8 @@ class Parallel_DOPE_Score():
                          )
         self.process_function = process_dope
 
+    def __reduce__(self):
+        return (self.__class__, (self.mol,))
 
     def get_score(self, coords,**kwargs):
         '''

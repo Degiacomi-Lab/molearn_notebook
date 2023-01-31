@@ -6,6 +6,7 @@ from mmtbx.validation.ramalyze import ramalyze
 from scitbx.array_family import flex
 from multiprocessing import Pool, Event, get_context
 from scipy.spatial.distance import cdist
+from copy import deepcopy
 
 class Ramachandran_Score():
     def __init__(self, mol, threshold=1e-3):
@@ -62,12 +63,16 @@ def process_ramachandran(coords, kwargs):
 
 class Parallel_Ramachandran_Score():
     def __init__(self, mol):
+        self.mol = deepcopy(mol)
         score = Ramachandran_Score
         ctx = get_context('spawn')
         self.pool = ctx.Pool(initializer=set_global_score,
                          initargs=(score, dict(mol=mol)),
                          )
         self.process_function = process_ramachandran
+
+    def __reduce__(self):
+        return (self.__class__, (self.mol,))
 
 
     def get_score(self, coords,**kwargs):
